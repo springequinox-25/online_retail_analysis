@@ -1,0 +1,216 @@
+---
+title: "Hierarchical Clustering Example"
+date: "2022-11-27"
+output: html_notebook
+---
+## Step 1: Reading and Understanding Data
+```{r}
+#Read data
+retail <- read.csv("OnlineRetail.csv", header = TRUE)
+head(retail)
+```
+
+```{r}
+#Data Information
+str(retail)
+dim(retail)
+```
+
+```{r}
+#Data Description
+library(psych)
+describe(retail)
+```
+
+## Step 2: Data Cleaning
+```{r}
+#Sum of Missing Values
+sum(is.na(retail))
+```
+
+```{r}
+#Clean the Missing Values
+retail <- na.omit(retail)
+sum(is.na(retail))
+```
+
+```{r}
+#Change the datatype of Customer Id to String
+retail$CustomerID <- as.character(retail$CustomerID)
+head(sapply(retail$CustomerID, class))
+```
+
+## Step 3: Data Preparation
+```{r}
+#Add new attribute: Total amount of transactions
+retail$Amount <- retail$Quantity * retail$UnitPrice
+
+#Get total amount for each customer
+amountPerCustomer <- aggregate(Amount ~ CustomerID, data=retail, FUN = sum)
+head(amountPerCustomer)
+```
+
+```{r}
+#Get total amount of transactions for each customer
+NumberPerCustomer <- aggregate(InvoiceNo ~ CustomerID, data=retail, FUN = length)
+head(NumberPerCustomer)
+```
+
+```{r}
+# Merging two characteristics
+CustomerInfo <- merge(amountPerCustomer, NumberPerCustomer, by="CustomerID")
+head(CustomerInfo)
+```
+
+```{r}
+library(lubridate)
+library(dplyr)
+
+# Convert date to proper time
+retail$InvoiceDateFinal <- as.Date(retail$InvoiceDate, format = "%d-%m-%Y")
+
+# To get the most recent date
+recDate <- max(retail$InvoiceDateFinal)
+recDate
+
+# Compute the difference between the most recent date and purchase date
+retail$RecentTrans <- difftime(recDate, retail$InvoiceDateFinal, units = "days")
+head(retail)
+```
+
+```{r}
+#Get the time difference from customers' most recent purchases
+PurchasePerCustomer <- aggregate(RecentTrans ~ CustomerID, data=retail, FUN = min)
+PurchasePerCustomer$RecentTrans <- as.numeric(PurchasePerCustomer$RecentTrans)
+head(PurchasePerCustomer)
+```
+
+```{r}
+# Merge the table
+CustomerInfoNew1 <- merge(CustomerInfo, PurchasePerCustomer, by="CustomerID")
+head(CustomerInfoNew1)
+```
+
+```{r}
+# Remove outliers for Amount
+dim(CustomerInfoNew1)
+quartiles <- quantile(CustomerInfoNew1$Amount, probs=c(.25, .75), na.rm = FALSE)
+IQR <- IQR(CustomerInfoNew1$Amount)
+
+Lower <- quartiles[1] - 1.5*IQR
+Upper <- quartiles[2] + 1.5*IQR 
+CustomerInfoCleaned <- subset(CustomerInfoNew1, CustomerInfoNew1$Amount > Lower & CustomerInfoNew1$Amount < Upper)
+
+# Remove outliers for Transactions Number (InvoiceNo)
+quartiles <- quantile(CustomerInfoCleaned$InvoiceNo, probs=c(.25, .75), na.rm = FALSE)
+IQR <- IQR(CustomerInfoCleaned$InvoiceNo)
+
+Lower <- quartiles[1] - 1.5*IQR
+Upper <- quartiles[2] + 1.5*IQR 
+CustomerInfoCleaned1 <- subset(CustomerInfoCleaned, CustomerInfoCleaned$InvoiceNo > Lower & CustomerInfoCleaned$InvoiceNo < Upper)
+
+# Remove outliers for Recent Transactions Dates (RecentTrans)
+quartiles <- quantile(CustomerInfoCleaned1$RecentTrans, probs=c(.25, .75), na.rm = FALSE)
+IQR <- IQR(CustomerInfoCleaned1$RecentTrans)
+
+Lower <- quartiles[1] - 1.5*IQR
+Upper <- quartiles[2] + 1.5*IQR 
+Customers <- subset(CustomerInfoCleaned1, CustomerInfoCleaned1$RecentTrans > Lower & CustomerInfoCleaned1$RecentTrans < Upper)
+ 
+dim(Customers)
+```
+
+```{r}
+# Set Customer ID to row names
+Customers$CustomerID <- as.numeric(Customers$CustomerID)
+rownames(Customers) <- Customers[,1]
+Customers[,1] <- NULL
+head(Customers)
+
+# Scale the data
+CustomersFinal <- scale(Customers)
+head(CustomersFinal)
+```
+
+## Step 4: Hierarchical Clustering
+
+AC describes the strength of the clustering structure. Values closer to 1 suggest a more balanced clustering structure such as the complete linkage. Values closer to 0 suggest less well-formed clusters such as the single linkage dendrogram.
+
+```{r}
+library(cluster)
+library(factoextra)
+
+# linkage methods
+methodHC <- c( "average", "single", "complete", "ward")
+names(methodHC) <- c( "average", "single", "complete", "ward")
+
+# function to compute agglomerative coefficient
+ac <- function(x) {
+  agnes(CustomersFinal, method = x)$ac
+}
+
+# get agglomerative coefficient for each linkage method
+sapply(methodHC, ac)
+```
+
+The ward method shows the highest coefficient, therefore, we are going to use this method in our solution.
+
+```{r}
+# Perform hierarchical clustering using Ward's minimum variance
+clusterWard <- agnes(CustomersFinal, method="ward")
+
+# Produce dendrogram
+pltree(clusterWard, cex = 0.6, hang = -1, main = "Dendrogram")
+```
+
+
+Although hierarchical clustering can provide a full dendrogram representing the cluster relationships. As seen from above, the clustering is very hard to clearly visualize. Therefore, we can use what elbow, silhouette and gap statistics methods suggest for the number of clustering. But keep in mind, there's no definite optimal number of clusters. 
+
+```{r}
+# Determining optimal cluster result
+library(NbClust)
+fviz_nbclust(CustomersFinal, FUN = hcut, method = "wss")
+```
+
+```{r}
+fviz_nbclust(CustomersFinal, FUN = hcut, method = "silhouette")
+```
+
+```{r}
+gap_stat <- clusGap(CustomersFinal, FUN = hcut, K.min = 2, K.max = 10, B=50)
+fviz_gap_stat(gap_stat)
+```
+
+From the previous three graphs, we are choosing number 4 to be the most optimal number of clusters under this context.
+```{r}
+# Compute distance matrix
+distanceM <- dist(CustomersFinal, method = "euclidean")
+
+# Perform Hierarchical Clustering using Ward's Method
+wardClustering <- hclust(distanceM, method = "ward.D2")
+```
+
+
+```{r}
+# Cut the dendrogram into 4 clusters
+groupCluster <- cutree(wardClustering, k=4)
+
+# Find the number of observations in each cluster
+table(groupCluster)
+```
+
+```{r}
+# Append Cluster Labels to Original Data
+CustomerInfoFinal <- cbind(Customers, cluster = groupCluster)
+
+# Display first six rows of Final Data
+head(CustomerInfoFinal)
+```
+
+```{r}
+# Find average values for each cluster for implication
+aggregate(CustomerInfoFinal, by=list(cluster=CustomerInfoFinal$cluster), mean)
+```
+
+
+
